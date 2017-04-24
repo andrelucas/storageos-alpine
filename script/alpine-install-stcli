@@ -2,17 +2,38 @@
 
 set -e -u
 
-docker pull andrelucas/stcli:latest |cat
+cli_version="0.0.4"
+
+stpath=/usr/local/bin
+stbin=storageos-bin
+stwrap=storageos
 
 ip=$(avahi-resolve-host-name -4 "$(hostname -s).local" | cut -f2)
 
-stbin=/usr/local/bin/stcli
-cat <<EOF >$stbin
+if [ ! -x /usr/bin/curl ]; then
+    apk add curl
+fi
+cd $stpath
+
+if [ ! -x $stbin ]; then
+    echo "Fetching storageos cli binary"
+    curl -s -L "https://github.com/storageos/go-cli/releases/download/v${cli_version}/storageos_linux_amd64" >$stbin
+fi
+chown root:root $stbin
+chmod 0755 $stbin
+
+stwrap=/usr/local/bin/storageos
+cat <<EOF >$stwrap
 #!/bin/bash
 user=${STORAGEOS_USERNAME:-storageos}
 pass=${STORAGEOS_PASSWORD:-storageos}
-host="$ip"
-exec docker run andrelucas/stcli:latest -u \$user -p \$pass -H \$host \$*
+host="${STORAGEOS_HOST:-${ip}}"
+env STORAGEOS_USERNAME="\$user" STORAGEOS_PASSWORD="\$pass" STORAGEOS_HOST="\$host" ${stpath}/${stbin} \$*
 EOF
-chown root:root $stbin
-chmod 0755 $stbin
+chown root:root $stwrap
+chmod 0755 $stwrap
+
+# For old time's sake.
+cd $stpath
+rm -f stcli
+ln -s $stwrap stcli
