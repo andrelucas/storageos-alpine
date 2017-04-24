@@ -4,7 +4,7 @@ VPROV	= $(VAGRANT) provision --provision-with
 
 all: up provision
 
-rebuild: destroy up provision
+rebuild: destroy up
 
 up: plugin
 	vagrant up
@@ -31,3 +31,6 @@ remove-plugin:
 
 consul:
 	$(VPROV) consul
+
+consul-rv:
+	$(VPROV) consul-rv
