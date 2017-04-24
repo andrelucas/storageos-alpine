@@ -1,4 +1,6 @@
 #!/bin/bash
+#
+# Install containerised Consul as a system service.
 
 set -e
 
@@ -8,14 +10,74 @@ num_nodes=${#cluster_hostnames[@]}
 ip=$(avahi-resolve-host-name -4 "$(hostname -s).local" | cut -f2)
 leader_ip=$(avahi-resolve-host-name -4 "${cluster_hostnames[0]}.local" | cut -f2)
 
-echo "Starting consul on $ip with $num_nodes nodes, leader on $leader_ip"
-docker rm -f consul 2>&1 || true
-docker pull consul |cat
-docker run -d --name consul --net=host consul agent -server \
--bind="${ip}" \
--client=0.0.0.0 \
--bootstrap-expect="${num_nodes}" \
--retry-join="${leader_ip}"
+# Install our configuration.
+cat <<EOF >/etc/conf.d/consul
+CONSUL_LEADER_IP="${leader_ip}"
+CONSUL_NUM_NODES=$num_nodes
+EOF
+
+# Install our init script.
+cat <<'EOF' >/etc/init.d/consul
+#!/sbin/openrc-run
+
+set -e
+
+description="Consul service discovery and configuration"
+
+num_nodes="${CONSUL_NUM_NODES:?}"
+ip="$(avahi-resolve-host-name -4 "$(hostname -s).local" | cut -f2)"
+leader_ip="${CONSUL_LEADER_IP:?}"
+
+name="consul"
+command="/usr/bin/docker"
+command_args="run --name consul --net=host consul agent -server -bind=${ip} -client=0.0.0.0 -bootstrap-expect=${num_nodes} -retry-join=${leader_ip}"
+pidfile="/var/run/consul.pid"
+CONSUL_LOGFILE="${CONSUL_LOGFILE:-/var/log/$RC_SVCNAME.log}"
+CONSUL_ERRFILE="${CONSUL_ERRFILE:-${CONSUL_LOGFILE}}"
+CONSUL_OUTFILE="${CONSUL_OUTFILE:-${CONSUL_LOGFILE}}"
+start_stop_daemon_args="--background --stderr ${CONSUL_ERRFILE} --stdout ${CONSUL_OUTFILE}"
+
+depend() {
+	need docker
+	provide consul
+}
+
+stop() {
+	einfo "Stopping ${RC_SVCNAME} ..."
+	docker stop consul >/dev/null
+}
+
+exit_cleanup() {
+	exited="$(docker ps -a -q -f status=exited -f name=consul)"
+	if [ -n "$exited" ]; then
+		einfo "Removing old (exited) container"
+		docker rm "$exited" >/dev/null
+	fi
+}
+
+start_pre() {
+	exit_cleanup
+    docker pull consul | cat
+}
+
+stop_post() {
+	exit_cleanup
+}
+EOF
+
+# Install and start.
+chmod a+x /etc/init.d/consul
+rc-update add consul
+rc-service consul restart
+
+# echo "Starting consul on $ip with $num_nodes nodes, leader on $leader_ip"
+# docker rm -f consul 2>&1 || true
+# docker pull consul |cat
+# docker run -d --name consul --net=host consul agent -server \
+# -bind="${ip}" \
+# -client=0.0.0.0 \
+# -bootstrap-expect="${num_nodes}" \
+# -retry-join="${leader_ip}"
 
 sleep 2
 echo "Querying local consul agent"

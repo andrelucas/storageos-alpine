@@ -9,8 +9,16 @@ else
 	shift
 fi
 
+if [ -z "$1" ]; then
+	kv_name="consul"
+else
+	kv_name="$1"
+	shift
+fi
+
 plugin=storageos/plugin
 ip=$(avahi-resolve-host-name -4 "$(hostname -s).local" | cut -f2)
+kv_ip=$(avahi-resolve-host-name -4 "${kv_name}.local" | cut -f2)
 
 # Don't recreate dir if it exists.  Consul will still have old id registered so
 # it needs to re-use same config for each run.
@@ -19,10 +27,32 @@ for dir in /var/lib/storageos; do
   [ -d $dir ] || mkdir -p $dir
 done
 
-# TODO: Move this to controlplane startup
-modprobe nbd nbds_max=1024 max_part=15
+# Set up nbd and autoload fuse. Note nbd isn't required, it just hugely improves
+# perforance.
+
+# Set options for nbd, the defaults aren't good enough for us.
+nbd_opts="nbds_max=1024 max_part=15"
+cat <<EOF >/etc/modprobe.d/storageos.conf
+options nbd $nbd_opts
+EOF
+
+# Set nbd and fuse to autoload.
+cat <<EOF >/etc/modules-load.d/storageos.conf
+nbd
+fuse
+EOF
+
+# Load now. Frustratingly, this won't use the options we set.
+# shellcheck disable=SC2086
+modprobe nbd $nbd_opts
 modprobe fuse
+
+# Check the options were correctly set.
+if [ "$(cat /sys/module/nbd/parameters/nbds_max)" -ne 1024 ]; then
+	echo "Failed to set nbd options correctly" >&2
+	exit 1
+fi
 
 echo "starting storageos plugin on $ip"
 docker plugin rm -f storageos 2>/dev/null || true
-docker plugin install --alias storageos --grant-all-permissions "$plugin:$version" ADVERTISE_IP="${ip}" KV_ADDR="${ip}"
+docker plugin install --alias storageos --grant-all-permissions "$plugin:$version" ADVERTISE_IP="${ip}" KV_ADDR="${kv_ip}"
